@@ -125,18 +125,8 @@ class GridWorldCueEnv():
         reward_A = ax.add_patch(patches.Rectangle((self.reward_locations[0][1],self.reward_locations[0][0]),1.0,1.0,linewidth=5,edgecolor=[0.5, 0.5, 0.5],facecolor=[0.5, 0.5, 0.5]))
         reward_B = ax.add_patch(patches.Rectangle((self.reward_locations[1][1],self.reward_locations[1][0]),1.0,1.0,linewidth=5,edgecolor=[0.5, 0.5, 0.5],facecolor=[0.5, 0.5, 0.5]))
         reward_condition = self.reward_condition
-        if reward_condition == "A":
-            reward_A.set_edgecolor('g')
-            reward_A.set_facecolor('g')
-            reward_B.set_edgecolor([0.7, 0.2, 0.2])
-            reward_B.set_facecolor([0.7, 0.2, 0.2])
-        elif reward_condition == "B":
-            reward_B.set_edgecolor('g')
-            reward_B.set_facecolor('g')
-            reward_A.set_edgecolor([0.7, 0.2, 0.2])
-            reward_A.set_facecolor([0.7, 0.2, 0.2])
-        reward_A.set_zorder(1)
-        reward_B.set_zorder(1)
+        ax.text(self.reward_locations[0][1] + 0.5, self.reward_locations[0][0] + 0.5, 'A', ha='center', va='center', fontsize = 15)
+        ax.text(self.reward_locations[1][1] + 0.5, self.reward_locations[1][0] + 0.5, 'B', ha='center', va='center', fontsize = 15)
 
         text_offsets = [0.4, 0.6]
 
