@@ -20,6 +20,15 @@ LOSS_IDX = 2
 ACTIONS = ["UP", "DOWN", "LEFT", "RIGHT"]
 
 class FrozenLake_Custom(Env):
+    """ States:
+            Location - All the individual locations of the grid ( Eg. 1x9 vector for 3x3 grid)
+            Context - To specify the hole and goal interchanging (1x2 vector)
+        
+        Obs:
+            Location - Identical to location hidden state (Eg. 9 categorical location one-hots for 3x3 grid)
+            Reward - [No_reward, Reward, Loss]
+    """
+    
     def __init__(self, context=1):
         self.grid_dims = [3, 3]
         self.num_locations = np.prod(self.grid_dims)
