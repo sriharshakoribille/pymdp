@@ -17,7 +17,8 @@ REWARD_MODALITY_ID = 1
 REWARD_IDX = 1
 LOSS_IDX = 2
 
-ACTIONS = ["UP", "DOWN", "LEFT", "RIGHT"]
+# ACTIONS = ["UP", "DOWN", "LEFT", "RIGHT"]
+ACTIONS = ["UP", "DOWN", "LEFT", "RIGHT", "STAY"]
 
 class FrozenLake_Custom(Env):
     """ States:
@@ -29,17 +30,16 @@ class FrozenLake_Custom(Env):
             Reward - [No_reward, Reward, Loss]
     """
     
-    def __init__(self, context=1):
+    def __init__(self, reward_condition=1):
         self.grid_dims = [3, 3]
         self.num_locations = np.prod(self.grid_dims)
-        self.num_states = [self.num_locations, 2]
-        self.num_controls = [self.num_locations, 1]
-        self.num_reward_conditions = self.num_states[TRIAL_FACTOR_ID]
+        self.num_reward_conditions = 2
+        self.num_states = [self.num_locations, self.num_reward_conditions]
+        self.num_controls = [len(ACTIONS), 1]
         self.num_obs = [self.num_locations, self.num_reward_conditions + 1]
         self.num_factors = len(self.num_states)
         self.num_modalities = len(self.num_obs)
 
-        (self.reward_loc, self.hole_loc) = (8, 6) if context==1 else (6, 8)
 
         # create a look-up table `loc_list` that maps linear indices to tuples of (y, x) coordinates 
         grid = np.arange(self.num_grid_points).reshape(self.grid_dims)
@@ -50,26 +50,36 @@ class FrozenLake_Custom(Env):
             self.loc_list.append(it.multi_index)
             it.iternext()
 
+        (self.reward_loc, self.hole_loc) = self.set_reward_locs(reward_condition)
         self._transition_dist = self._construct_transition_dist()
         self._likelihood_dist = self._construct_likelihood_dist()
 
         self._reward_condition = None
         self._state = None
     
-    def reset(self, state=None):
+    def reset(self, state=None, reward_condition=None):
         if state is None:
             loc_state = utils.onehot(0, self.num_locations)
             
-            self._reward_condition = np.random.randint(self.num_reward_conditions) # randomly select a reward condition
-            reward_condition = utils.onehot(self._reward_condition, self.num_reward_conditions)
-
+            self._reward_condition = np.random.randint(self.num_reward_conditions) if reward_condition is None \
+                                     else reward_condition
+            reward_condition_categorical = utils.onehot(self._reward_condition, self.num_reward_conditions)
+            # TODO: Should the A and B matrices change??
+            
             full_state = utils.obj_array(self.num_factors)
             full_state[LOCATION_FACTOR_ID] = loc_state
-            full_state[TRIAL_FACTOR_ID] = reward_condition
+            full_state[TRIAL_FACTOR_ID] = reward_condition_categorical
             self._state = full_state
         else:
             self._state = state
         return self._get_observation()
+    
+    def reset_env(self, reward_condition):
+        return self.reset(state=None,reward_condition=reward_condition)
+    
+    def set_reward_locs(self,reward_condition=1):
+        (reward_loc, hole_loc) = (8, 6) if reward_condition==1 else (6, 8)
+        return (reward_loc, hole_loc)
 
     def step(self, actions):
         prob_states = utils.obj_array(self.num_factors)
@@ -106,17 +116,42 @@ class FrozenLake_Custom(Env):
         return obs
 
     def _construct_transition_dist(self):
-        B_locs = np.eye(self.num_locations)
-        B_locs = B_locs.reshape(self.num_locations, self.num_locations, 1)
-        B_locs = np.tile(B_locs, (1, 1, self.num_locations))
-        B_locs = B_locs.transpose(1, 2, 0)
 
-        B = utils.obj_array(self.num_factors)
+        # initialize the shapes of each sub-array `B[f]`
+        B_f_shapes = [ [ns, ns, self.num_controls[f]] for f, ns in enumerate(self.num_states)]
 
-        B[LOCATION_FACTOR_ID] = B_locs
-        B[TRIAL_FACTOR_ID] = np.eye(self.num_reward_conditions).reshape(
-            self.num_reward_conditions, self.num_reward_conditions, 1
-        )
+        # create the `B` array and fill it out
+        B = utils.obj_array_zeros(B_f_shapes)
+
+        # fill out `B[0]` using the 
+        for action_id, action_label in enumerate(ACTIONS):
+
+            for curr_state, grid_location in enumerate(self.loc_list):
+
+                y, x = grid_location
+
+                if action_label == "UP":
+                    next_y = y - 1 if y > 0 else y 
+                    next_x = x
+                elif action_label == "DOWN":
+                    next_y = y + 1 if y < (self.grid_dims[0]-1) else y 
+                    next_x = x
+                elif action_label == "LEFT":
+                    next_x = x - 1 if x > 0 else x 
+                    next_y = y
+                elif action_label == "RIGHT":
+                    next_x = x + 1 if x < (self.grid_dims[1]-1) else x 
+                    next_y = y
+                elif action_label == "STAY":
+                    next_x = x
+                    next_y = y
+
+                new_location = (next_y, next_x)
+                next_state = self.loc_list.index(new_location)
+                B[LOCATION_FACTOR_ID][next_state, curr_state, action_id] = 1.0
+        
+        B[TRIAL_FACTOR_ID][:,:,0] = np.eye(self.num_states[1])
+
         return B
 
     def _construct_likelihood_dist(self):
@@ -126,59 +161,23 @@ class FrozenLake_Custom(Env):
         # make the location observation only depend on the location state (proprioceptive observation modality)
         A[LOCATION_MODALITY_ID] = np.tile(np.expand_dims(np.eye(self.num_locations), (-1)), (1, 1, self.num_states[1]))
 
+        ## Reward addition
         # make the reward observation depend on the location (being at reward location) and the reward condition
-        A[REWARD_MODALITY_ID][0,:,:] = 1.0 # default makes Null the most likely observation everywhere
+        A[REWARD_MODALITY_ID][0,:,:] = 1.0  # default makes Null the most likely observation everywhere.
+                                            # 1 for almost all the locations with 'No_reward' obs
+        
+        reward_loc_idx = self.loc_list.index(self.reward_loc)
+        hole_loc_idx = self.loc_list.index(self.hole_loc)
 
+        # Setting appropriate values for the reward location
+        A[REWARD_MODALITY_ID][0,reward_loc_idx,:] = 0.0
+        A[REWARD_MODALITY_ID][1,reward_loc_idx,0] = 1.0
+        A[REWARD_MODALITY_ID][2,reward_loc_idx,1] = 1.0
 
-        # for loc in range(self.num_states[LOCATION_FACTOR_ID]):
-        #     for reward_condition in range(self.num_states[TRIAL_FACTOR_ID]):
-
-        #         # The case when the agent is in the centre location
-        #         if loc == 0:
-        #             # When in the centre location, reward observation is always 'no reward'
-        #             # or the outcome with index 0
-        #             A[REWARD_MODALITY_ID][0, loc, reward_condition] = 1.0
-
-        #             # When in the centre location, cue is totally ambiguous with respect to the reward condition
-        #             A[CUE_MODALITY_ID][:, loc, reward_condition] = 1.0 / self.num_obs[2]
-
-        #         # The case when loc == 3, or the cue location ('bottom arm')
-        #         elif loc == 3:
-
-        #             # When in the cue location, reward observation is always 'no reward'
-        #             # or the outcome with index 0
-        #             A[REWARD_MODALITY_ID][0, loc, reward_condition] = 1.0
-
-        #             # When in the cue location, the cue indicates the reward condition umambiguously
-        #             # signals where the reward is located
-        #             A[CUE_MODALITY_ID][reward_condition, loc, reward_condition] = 1.0
-
-        #         # The case when the agent is in one of the (potentially-) rewarding armS
-        #         else:
-
-        #             # When location is consistent with reward condition
-        #             if loc == (reward_condition + 1):
-        #                 # Means highest probability is concentrated over reward outcome
-        #                 high_prob_idx = REWARD_IDX
-        #                 # Lower probability on loss outcome
-        #                 low_prob_idx = LOSS_IDX
-        #             else:
-        #                 # Means highest probability is concentrated over loss outcome
-        #                 high_prob_idx = LOSS_IDX
-        #                 # Lower probability on reward outcome
-        #                 low_prob_idx = REWARD_IDX
-
-        #             reward_probs = self.reward_probs[0]
-        #             A[REWARD_MODALITY_ID][high_prob_idx, loc, reward_condition] = reward_probs
-
-        #             reward_probs = self.reward_probs[1]
-        #             A[REWARD_MODALITY_ID][low_prob_idx, loc, reward_condition] = reward_probs
-
-        #             # Cue is ambiguous when in the reward location
-        #             A[CUE_MODALITY_ID][:, loc, reward_condition] = 1.0 / self.num_obs[2]
-
-        #         # The agent always observes its location, regardless of the reward condition
-        #         A[LOCATION_MODALITY_ID][loc, loc, reward_condition] = 1.0
+        # Setting appropriate values for the hole location
+        A[REWARD_MODALITY_ID][0,hole_loc_idx,:] = 0.0
+        A[REWARD_MODALITY_ID][1,hole_loc_idx,1] = 1.0
+        A[REWARD_MODALITY_ID][2,hole_loc_idx,0] = 1.0
 
         return A
 
